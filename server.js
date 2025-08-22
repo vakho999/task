@@ -1,46 +1,62 @@
 const http = require('http');
-const url = require('url');
+const fs = require('fs');
+const path = require('path');
 
 const PORT = process.env.PORT || 3000;
+const DATA_FILE = path.join(__dirname, 'books.json');
 
-// წიგნების "ბაზა" მეხსიერებაში
-let books = [
-  { title: 'Book One' },
-  { title: 'Book Two' },
-  { title: 'Book Three' }
-];
+function loadBooks() {
+  try {
+    if (!fs.existsSync(DATA_FILE)) {
+      fs.writeFileSync(DATA_FILE, JSON.stringify([]));
+    }
+    const data = fs.readFileSync(DATA_FILE, 'utf-8');
+    return JSON.parse(data);
+  } catch (err) {
+    console.error('ფაილის წაკითხვის შეცდომა:', err);
+    return [];
+  }
+}
+
+function saveBooks(books) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(books, null, 2), 'utf-8');
+}
 
 const server = http.createServer((req, res) => {
-  const parsedUrl = url.parse(req.url, true);
+  const url = new URL(req.url, `http://${req.headers.host}`);
   const method = req.method;
-  const path = parsedUrl.pathname;
+  const path = url.pathname;
 
-  // პასუხისთვის ჰედერი
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
   if (method === 'GET' && path === '/books') {
-    // ყველა წიგნის დაბრუნება
+    const books = loadBooks();
     res.statusCode = 200;
     res.end(JSON.stringify(books));
   } 
   else if (method === 'POST' && path === '/books') {
-    // ახალი წიგნის დამატება
     let body = '';
-    req.on('data', chunk => {
-      body += chunk.toString();
-    });
+    req.on('data', chunk => (body += chunk.toString()));
 
     req.on('end', () => {
       try {
         const data = JSON.parse(body);
-        if (data.title) {
-          books.push({ title: data.title });
-          res.statusCode = 201;
-          res.end(JSON.stringify({ message: 'წიგნი დამატებულია', books }));
-        } else {
+        if (!data.title) {
           res.statusCode = 400;
-          res.end(JSON.stringify({ error: 'title ველი აუცილებელია' }));
+          return res.end(JSON.stringify({ error: 'title ველი აუცილებელია' }));
         }
+
+        let books = loadBooks();
+        if (books.find(b => b.title === data.title)) {
+          res.statusCode = 400;
+          return res.end(JSON.stringify({ error: `"${data.title}" უკვე არსებობს` }));
+        }
+
+        books.push({ title: data.title });
+        saveBooks(books);
+
+        res.statusCode = 201;
+        res.end(JSON.stringify({ message: 'წიგნი დამატებულია', books }));
       } catch (err) {
         res.statusCode = 400;
         res.end(JSON.stringify({ error: 'არასწორი JSON' }));
@@ -48,25 +64,25 @@ const server = http.createServer((req, res) => {
     });
   } 
   else if (method === 'DELETE' && path === '/books') {
-    // წასაშლელი წიგნი query-ში
-    const title = parsedUrl.query.title;
+    const title = url.searchParams.get('title');
     if (!title) {
       res.statusCode = 400;
-      res.end(JSON.stringify({ error: 'title query parameter აუცილებელია' }));
-      return;
+      return res.end(JSON.stringify({ error: 'title query param აუცილებელია' }));
     }
 
+    let books = loadBooks();
     const initialLength = books.length;
     books = books.filter(b => b.title !== title);
 
     if (books.length < initialLength) {
+      saveBooks(books);
       res.statusCode = 200;
       res.end(JSON.stringify({ message: `წიგნი "${title}" წაშლილია`, books }));
     } else {
       res.statusCode = 404;
-      res.end(JSON.stringify({ error: 'ასეთი წიგნი ვერ მოიძებნა' }));
+      res.end(JSON.stringify({ error: `"${title}" ვერ მოიძებნა` }));
     }
-  }
+  } 
   else {
     res.statusCode = 404;
     res.end(JSON.stringify({ error: 'მოთხოვნილი როუტი არ არსებობს' }));
